@@ -12,7 +12,7 @@
 
 一个跑在普通笔记本上的**实时果蝇脑**：从 FlyWire 全脑连接组里抽出 **606 个神经元、
 8126 条化学突触**的功能子电路，以 1 kHz 做 LIF 仿真，每 20 ms 把群体活动映射成
-OSR6 的六轴指令（TCode）。本机（无 GPU）实测 **70–96× 实时**。
+OSR6 的六轴指令（TCode）。606 神经元实测 **70–96× 实时**。
 
 不是"随机数驱动舵机"的演示：六轴里每一个值都能追到具体的神经元群，
 loom 刺激会触发巨纤维逃逸，捕食者会被逃逸真的推开。
@@ -199,21 +199,129 @@ OSR-FlyBrain/
 
 ```bash
 python tests/test_behaviour.py   # 19 项：电路完整性、静息、loom 选择性、不应期、实时性能
-python tests/test_body.py        # 26 项：TCode 编码、钳位、去重、闭环、慢基线、逃逸门控、风感
+python tests/test_body.py        # 33 项：TCode、闭环、慢基线、逃逸门控、风感、视觉/光流、感觉驱动
 ```
 
-本机实测：**45/45 全过**。
+实测：**52/52 全过**。
 
 ---
 
 ## 性能
 
-| 配置 | 实时倍率 | 可实时运行的规模 |
+| 后端 | 实时倍率 | 规模上限（参考） |
 |---|---|---|
 | 606 神经元 · numba JIT | **70–96×** | ~5 万神经元 |
 | 606 神经元 · 纯 numpy | ~17× | ~5 千神经元 |
 
 单步（1 ms，606 神经元 / 8126 突触）约 0.010–0.014 ms，预算 1.000 ms。
+
+---
+
+## 扩大电路 / 更换大脑模型
+
+换到更强的机器后，想加神经元或换一套脑模型，按你改的层级分三种情况。
+先记住三个契约，不管怎么换都别混：
+
+| 层 | 文件 | 契约 |
+|---|---|---|
+| 数据 | `data/circuit.json` | `neurons[{id,type,role,side,pos}]` + `edges[[pre,post,weight]]` |
+| 网络 | `brain/lif.py` | `build_from_circuit(c)` 返回 `.n/.rate/.active/.step(drive)/.reset()/.baseline/.noise` |
+| 映射 | `body/mapping.py` | `REF[role]` + `_roles` → 六轴 |
+
+### A. 同一套 FlyWire，加更多神经元
+
+1. 装环境、下数据：
+
+```bash
+pip install -r requirements.txt
+python tools/fetch.py --parts 8          # 4 个 gz，约 55 MB
+```
+
+2. 改 `etl.py` 的规模旋钮（第 32–38 行），或直接用 CLI：
+
+| 常量 | 默认 | 作用 | 建议 |
+|---|---|---|---|
+| `PARTNERS_PER_GROUP` | 30 | 每个核心群拉多少伙伴 | 100 → 300 逐步试 |
+| `ASCENDING_LIMIT` | 40 | 上行神经元上限 | 100–300 |
+| `WIND_LIMIT` | 20 | JO 风感上限 | 60 |
+| `SPECIFICITY` | 0.20 | 伙伴对目标群的输出占比下限 | 不低于 0.15 |
+| `GAIN_E / GAIN_I` | 3.2 / 1.8 | 归一化后的总输入 | 扩规模后重标 |
+| `ALPHA` | 1.0 | 归一化幂次 | 见下 |
+
+```bash
+python etl.py --partners 200 --ascending 100 --wind 60 --out data/circuit.json
+```
+
+3. **关键：扩规模必须改归一化。** `etl.py` 现在的权重是
+   `w = syn · GAIN_E / (tot_post^α · ref^(1-α))`（α=1）。α=1 时每个突触后
+   神经元的总兴奋输入被归一化到 `GAIN_E`，**上游一多，每条权重被稀释**——
+   这就是 1144 神经元时 loom 触发从 19/20 掉到 0/20 的原因。两条路：
+   - 保持 α=1，但按「来源群」归一化（每个 presynaptic 群对目标的总输入固定）；
+   - α 降到 0.5–0.7，保留一部分突触数差异；代价是全部增益 / `REF` 重标。
+
+4. 重标定 `body/mapping.py` 的 `REF`：跑 8–20 s，每 20 ms 采各群
+   `net.rate.mean()`，取（中位 + p90）/2，让 50–60% 的时间输出落在 0.3–1.0。
+
+5. 改测试硬编码：`tests/test_behaviour.py` 里 `len(gf)==2`、`len(lc4)==104`、
+   `len(lp)==210`、`len(steer_l)==2` 等，换成新值或范围。
+
+6. 验证：
+
+```bash
+python tests/test_behaviour.py
+python tests/test_body.py
+python tools/selectivity.py      # loom vs 非感觉，19/20 是基线
+python tools/bench_step.py       # 实时倍率与规模曲线
+python tools/verify_jit.py       # numba / numpy 必须逐位一致
+```
+
+7. **前端规模**：`/brain` 一次性发所有节点和边，`sim.html` 全量遍历。
+   606 时约 1 MB；超过 3000 神经元要做服务端 LOD / 抽样、或把突触层改成
+   WebGL / Three.js、或给 `/brain` 加 `?max=N`。
+
+### B. 换 / 扩展功能群（加嗅觉、T4/T5）
+
+1. 在 `etl.py` 的 `CORE_GROUPS` 加类型，`role_of` 会自动标成新角色。
+2. 新角色必须补三处：`body/mapping.py` 的 `REF`、`body/world.py` 的
+   `indices` / 刺激 / 驱动、`sim.html` 的 `ROLE_COLOR / ROLE_CN / ROLE_AXES`。
+3. 现实提醒：当前子图没有 T4/T5、没有嗅觉 / 味觉。加它们不是多几个按钮，
+   而是重新选种子 + 重新归一化 + 重标定。
+
+### C. 换模型本身（HH / Brian2 / GPU / 全脑）
+
+保持契约，换 `brain/lif.py`。新实现只要提供
+`.n/.rate/.active/.step(drive)/.reset()`，`brain_loop.py`、`server.py`、测试都不用改。
+
+- LIF 参数在 `brain/lif.py:9-16`（`DT_MS / TAU_M_MS / V_TH / REFRACT_MS /
+  INH_DELAY_MS / RATE_TAU_MS / ADAPT_TAU_MS / ADAPT_GAIN`）。规模变大后
+  SFA 与增益要重调，否则双稳态。
+- GPU：`numba.cuda` 重写 kernel，或 Brian2CUDA / GeNN。全脑 13.9 万神经元、
+  约 5000 万突触，稀疏 CSR 显存约 0.5–1 GB，需要独立显卡。
+- 全脑实时是研究工程，不是改配置项。
+
+### 换机器后先测什么
+
+先跑 `python tools/bench_step.py`，它会给出「神经元数 → 实时倍率」的实测曲线。
+参考：606 神经元是 70–96×；边数增长比神经元快，`--partners` 一大，
+内存和单步都会先顶不住。
+
+### 最小改动清单
+
+- [ ] `etl.py`：`PARTNERS_PER_GROUP / ASCENDING_LIMIT / WIND_LIMIT / SPECIFICITY / ALPHA`
+- [ ] `etl.py`：`CORE_GROUPS`（新类型 / 新角色）
+- [ ] 归一化：按来源群归一化，或 α 降到 0.5–0.7
+- [ ] `body/mapping.py`：`REF` + `_roles` + 增益
+- [ ] `body/world.py`：新 role 的索引 / 刺激 / 驱动
+- [ ] `sim.html`：`ROLE_COLOR / ROLE_CN / ROLE_AXES` + LOD
+- [ ] `tests/test_behaviour.py`：硬编码计数
+- [ ] `tools/selectivity.py / bench_step.py / verify_jit.py` 全过
+- [ ] `data/circuit.json` 重生成
+
+### 三件不要做
+
+1. 只把 `--partners` 从 30 调到 1000 就完事——归一化稀释会让巨纤维选择性归零。
+2. 改完电路不重标 `REF`——轴会不动或打满。
+3. 前端直接上 13.9 万节点 / 5000 万边——浏览器会崩，必须先做 LOD 或 WebGL。
 
 ---
 
