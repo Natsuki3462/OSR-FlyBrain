@@ -70,7 +70,7 @@ class Latch:
 class SixAxisMapper:
 
     def __init__(self, circuit, *, steer_gain=1.0, fwd_gain=1.0, back_gain=1.0,
-                 wing_gain=1.0, groom_gain=1.0,
+                 wing_gain=0.25, groom_gain=1.0,
                  steer_tau_ms=STEER_BASELINE_MS,
                  dwell_ms=DWELL_MS, escape_ms=ESCAPE_MS,
                  smooth_ms=110.0, loom_sync_min=LOOM_SYNC_MIN):
@@ -132,7 +132,7 @@ class SixAxisMapper:
             return 0.0
         return float(net.rate[idx].mean()) / ref
 
-    def update(self, net, gf_fired, dt_ms=1.0, loom_sync=0):
+    def update(self, net, gf_fired, dt_ms=1.0, loom_sync=0, vision_steer=0.0):
         dt = max(1e-3, float(dt_ms))
         steer_alpha = 1.0 - math.exp(-dt / self.steer_tau)
         smooth = 1.0 - math.exp(-dt / self.smooth_tau)
@@ -179,8 +179,8 @@ class SixAxisMapper:
         else:
             l1 = 0.5 + 0.35 * fwd + ESCAPE_FWD * esc
         ax["L1"] = _clamp(l1)
-        ax["L2"] = _clamp(0.5 + 0.40 * steer)
-        ax["R0"] = _clamp(0.5 + 0.28 * steer)
+        ax["L2"] = _clamp(0.5 + 0.30 * steer + 0.55 * vision_steer)
+        ax["R0"] = _clamp(0.5 + 0.22 * steer + 0.35 * vision_steer)
         ax["R1"] = _clamp(0.5 + 0.35 * groom_wave)
         ax["R2"] = _clamp(0.5 + 0.40 * wing_n - 0.20 * esc)
         wing_hz = WING_HZ_REST * wing_n + WING_HZ_ESCAPE * esc
@@ -194,6 +194,7 @@ class SixAxisMapper:
         self.diag = {"steer": steer, "fwd": fwd, "back": back,
                      "wing": wing_n, "groom": groom, "escape": esc,
                      "steer_now": steer_now, "steer_base": self.steer_base,
+                     "vision_steer": float(vision_steer),
                      "escape_hit": 1.0 if escape_hit else 0.0,
                      "loom_sync": float(loom_sync)}
         return ax

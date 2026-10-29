@@ -23,6 +23,21 @@ FLY_DEADBAND = 0.08
 FLY_BACK_SCALE = 0.20
 
 
+FLOW_DIST = 32.0
+FLOW_GAIN = 0.9
+FLOW_AMP = 2.2
+
+GROOM_GAP_MIN = 20000.0
+GROOM_GAP_MAX = 60000.0
+GROOM_DUR_MIN = 2000.0
+GROOM_DUR_MAX = 5000.0
+GROOM_AMP = 2.4
+
+WING_TONIC = 0.10
+WING_AIR_AMP = 0.15
+WING_FB_GAIN = 0.05
+
+
 PRED_GAP_MIN = 10000.0
 PRED_GAP_MAX = 50000.0
 PRED_GONE = 52.0
@@ -61,6 +76,17 @@ class World:
         self.loom = np.asarray(
             circuit.indices(role="loom_lc4")
             + circuit.indices(role="loom_lplc2"), dtype=np.int32)
+
+        self.loom_L = np.asarray(
+            [i for i in self.loom
+             if circuit.neurons[int(i)].get("side") == "left"], dtype=np.int32)
+        self.loom_R = np.asarray(
+            [i for i in self.loom
+             if circuit.neurons[int(i)].get("side") == "right"], dtype=np.int32)
+        self.steer_l = np.asarray(circuit.by_role.get("steer_left", []),
+                                  dtype=np.int32)
+        self.steer_r = np.asarray(circuit.by_role.get("steer_right", []),
+                                  dtype=np.int32)
         self.wind = np.asarray(circuit.indices(role="wind"), dtype=np.int32)
         self.asc = np.asarray(circuit.indices(role="ascending"), dtype=np.int32)
         self.asc_hz = float(asc_hz)
@@ -98,6 +124,8 @@ class World:
                 + list(circuit.indices(role="wing_b"))
                 + list(circuit.indices(role="wing_c")), dtype=np.int32),
         }
+        self.groom_idx = self._stim_idx["groom"]
+        self.wing_idx = self._stim_idx["wing"]
         self._manual = {}
 
         self.drive = np.zeros(circuit.n, dtype=np.float32)
@@ -159,11 +187,23 @@ class World:
         self._spawn_t = 0.0
         self._next_appear = 0.0
 
+
+        self.vision = {"az": 0.0, "lat": 0.0, "prox": 0.0,
+                       "flow": 0.0, "d": self.pred_d}
+        self.vision_steer = 0.0
+        self._wing_fb = 0.0
+        self.wing_drive = 0.0
+        self._groom_next = 15000.0
+        self._groom_until = 0.0
+        self.groom_bout = False
+
     def set_axes(self, axes, esc=0.0):
 
         if axes:
             self._last_axes = axes
             self._last_esc = float(esc) if esc else 0.0
+
+            self._wing_fb = float(axes.get("V0", 0.0) or 0.0)
 
     def _pick(self, pool):
         k = min(self.stim, pool.size)
@@ -204,7 +244,8 @@ class World:
     def _spawn(self, t_ms):
 
         self._spawn_t = float(t_ms)
-        self._px = PRED_PX0 * (0.4 + 1.2 * self.rng.random())
+        self._px = (PRED_PX0 * (0.4 + 1.2 * self.rng.random())
+                    * (1.0 if self.rng.random() < 0.5 else -1.0))
         self._py = -PRED_D0
         self._heading = 0.0
         self._last_axes = None
@@ -302,9 +343,8 @@ class World:
                 self._mark(sel)
 
 
-        self._apply_manual(d, t_ms)
-
         if self.mode == "quiet":
+            self._apply_manual(d, t_ms)
             return d
 
 
@@ -317,7 +357,18 @@ class World:
                 d[self.flow] = self.flow_amp
                 self._mark(self.flow)
 
+
+        if self.mode in ("demo", "live", "flow"):
+            flow_on = t_ms < self._flow_until
+            wd = (WING_TONIC + (WING_AIR_AMP if flow_on else 0.0)
+                  + WING_FB_GAIN * self._wing_fb)
+            self.wing_drive = wd
+            if wd > 0.02 and self.wing_idx.size:
+                d[self.wing_idx] = np.maximum(d[self.wing_idx], wd)
+                self._mark(self.wing_idx)
+
         if self.mode == "flow":
+            self._apply_manual(d, t_ms)
             return d
 
 
@@ -330,11 +381,17 @@ class World:
         self._last_t = t_ms
 
 
+        near = False
         if self.pred_active:
+            if not self.pred_on or self._leaving:
+
+
+                self.vision_steer = 0.0
+                self.vision = {"az": 0.0, "lat": 0.0, "prox": 0.0,
+                               "flow": 0.0, "d": round(self.pred_d, 2)}
             if not self.pred_on and t_ms >= self._next_appear:
                 self._spawn(t_ms)
 
-            near = False
             if self.pred_on:
                 if self._leaving:
                     self.pred_state = "leave"
@@ -347,6 +404,24 @@ class World:
                 else:
                     self.pred_state = "active"
                     dnow = self._update_predator(dt)
+
+                    lat = max(-1.0, min(1.0, self._px / (dnow + 1e-6)))
+                    prox = max(0.0, min(1.0, 1.0 - dnow / FLOW_DIST))
+                    az = math.atan2(self._px, self._py)
+
+
+                    away = -math.tanh(lat / 0.12)
+                    flow = FLOW_GAIN * prox * away
+                    self.vision_steer = max(-1.0, min(1.0, flow))
+                    self.vision = {"az": round(az, 3), "lat": round(lat, 3),
+                                   "prox": round(prox, 3),
+                                   "flow": round(flow, 3), "d": round(dnow, 2)}
+                    if abs(flow) > 0.02:
+                        amp = FLOW_AMP * min(1.0, abs(flow))
+                        idx = self.steer_r if flow > 0 else self.steer_l
+                        if idx.size:
+                            d[idx] = np.maximum(d[idx], amp)
+                            self._mark(idx)
                     near = dnow < self.loom_dist
                     if near != self._near:
                         self.events.append(
@@ -365,14 +440,43 @@ class World:
 
                 if near and not self._leaving:
                     if t_ms >= self._next_loom:
-                        self._active = (self._pick(self.loom) if self.loom.size
+
+                        k = self.stim
+                        k_r = max(0, min(k, int(round(k * (0.5 + 0.5 * lat)))))
+                        k_l = k - k_r
+                        parts = []
+                        if k_l > 0 and self.loom_L.size:
+                            parts.append(self.rng.choice(
+                                self.loom_L, size=min(k_l, self.loom_L.size),
+                                replace=False))
+                        if k_r > 0 and self.loom_R.size:
+                            parts.append(self.rng.choice(
+                                self.loom_R, size=min(k_r, self.loom_R.size),
+                                replace=False))
+                        self._active = (np.concatenate(parts) if parts
                                         else _EMPTY_I32)
                         self._until = t_ms + self.pulse
                         self._next_loom = t_ms + LOOM_CADENCE * (
                             0.85 + 0.3 * self.rng.random())
                     if t_ms < self._until and self._active.size:
-                        d[self._active] = self.amp
+                        d[self._active] = self.amp * (0.7 + 0.3 * prox)
                         self._mark(self._active)
+
+
+        if self.mode in ("demo", "live"):
+            if near:
+                self._groom_until = 0.0
+            elif t_ms >= self._groom_next:
+                self._groom_until = t_ms + GROOM_DUR_MIN + (
+                    GROOM_DUR_MAX - GROOM_DUR_MIN) * self.rng.random()
+                self._groom_next = t_ms + GROOM_GAP_MIN + (
+                    GROOM_GAP_MAX - GROOM_GAP_MIN) * self.rng.random()
+                self.events.append(
+                    (int(t_ms), "groom", int(self.groom_idx.size)))
+            self.groom_bout = bool(t_ms < self._groom_until)
+            if self.groom_bout and self.groom_idx.size:
+                d[self.groom_idx] = GROOM_AMP
+                self._mark(self.groom_idx)
 
 
         if self.mode in ("demo", "live", "wind"):
@@ -390,4 +494,5 @@ class World:
                 d[self._active_w] = self.amp
                 self._mark(self._active_w)
 
+        self._apply_manual(d, t_ms)
         return d

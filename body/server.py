@@ -102,6 +102,13 @@ class SimRunner(threading.Thread):
         self.cum = np.zeros(self.c.n, dtype=np.int32)
         self.brain = build_brain_payload(self.c)
 
+        self._rate_roles = [(r, np.asarray(idx, dtype=np.int32))
+                            for r, idx in self.c.by_role.items() if idx]
+        self.metrics = {}
+        self._escapes = 0
+        self._loom_peak = 0
+        self._ep_t0 = time.perf_counter()
+
         self.lock = threading.Lock()
         self.stim_q = SimpleQueue()
         self.frame = {"t": 0, "ax": dict(self.mapper.axes), "d": {},
@@ -124,7 +131,12 @@ class SimRunner(threading.Thread):
                 "neurons": self.c.n,
                 "synapses": len(self.c.edges),
                 "scenario": self.scenario,
+                "metrics": dict(self.metrics),
             }
+
+    def get_metrics(self):
+        with self.lock:
+            return dict(self.metrics)
 
     def push_stim(self, kind):
 
@@ -155,6 +167,9 @@ class SimRunner(threading.Thread):
 
     def _episode(self, episode):
         t0 = time.perf_counter()
+        self._escapes = 0
+        self._loom_peak = 0
+        self._ep_t0 = time.perf_counter()
         nf = 0
         gf_any = False
         sync_buf = [0] * LOOM_WINDOW
@@ -189,7 +204,8 @@ class SimRunner(threading.Thread):
             if t >= nf:
                 loom_sync = max(sync_buf)
                 axes = self.mapper.update(self.net, gf_any, dt_ms=FRAME_MS,
-                                          loom_sync=loom_sync)
+                                          loom_sync=loom_sync,
+                                          vision_steer=self.world.vision_steer)
 
                 self.world.set_axes(axes, self.mapper.diag.get("escape", 0.0))
                 gf_any = False
@@ -197,7 +213,26 @@ class SimRunner(threading.Thread):
                 _n, line = self.link.send6(axes)
                 preview = build_line({a: axes[a] for a in AXES6
                                       if a in axes})
+                if self.mapper.diag.get("escape_hit"):
+                    self._escapes += 1
+                self._loom_peak = max(self._loom_peak, int(loom_sync))
+                elapsed = max(1e-6, time.perf_counter() - self._ep_t0)
+                metrics = {
+                    "rtf": round((t + 1) / (elapsed * 1000.0), 1),
+                    "tx_ps": round(self.link.tx_count / elapsed, 1),
+                    "escapes": self._escapes,
+                    "loom_peak": self._loom_peak,
+                    "rates": {r: round(float(self.net.rate[idx].mean()), 4)
+                              for r, idx in self._rate_roles},
+                    "vision": dict(self.world.vision),
+                    "vision_steer": round(self.world.vision_steer, 3),
+                    "groom": bool(self.world.groom_bout),
+                    "wing_drive": round(self.world.wing_drive, 3),
+                    "pred_state": self.world.pred_state,
+                    "pred_d": round(self.world.pred_d, 2),
+                }
                 with self.lock:
+                    self.metrics = metrics
                     self.frame = {
                         "t": t,
                         "ep": episode,
@@ -278,6 +313,8 @@ class Handler(BaseHTTPRequestHandler):
                               "application/javascript; charset=utf-8")
         if path == "/state":
             return self._send(200, json.dumps(self.runner.snapshot()))
+        if path == "/metrics":
+            return self._send(200, json.dumps(self.runner.get_metrics()))
         if path == "/brain":
             return self._send(200, self.brain_json)
         if path == "/api/link":

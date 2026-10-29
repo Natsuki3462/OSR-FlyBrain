@@ -425,6 +425,53 @@ UI 左边有一个默认收起的抽屉（浮层，不改 grid 布局），里�
 
 ---
 
+### 4.12 视觉场 / 光流 / 指标 / 通路追踪（2026-10-30）
+
+**视觉场**：捕食者相对位置 `(px, py)` 给出侧向分量 `lat = px/d` 和接近度
+`prox = 1 - d/FLOW_DIST`。LC4/LPLC2 按 `side` 拆成左/右两组，每次 loom 的
+60 个神经元按 `k_r = 60·(0.5 + 0.5·lat)` 分配，靠近捕食者的一侧更活跃；
+**总数不变**，所以 loom 同步峰值（逃逸门控 `LOOM_SYNC_MIN=35`）不受影响。
+
+**光流转向**：`away = -tanh(lat / 0.12)`（饱和：直线逼近时 `lat` 几乎不变，
+不饱和就几乎没有信号），`flow = FLOW_GAIN · prox · away`。两条路同时走：
+
+1. 驱动 `steer_left/right` 命令群（`FLOW_AMP·|flow|`）；
+2. 把 `vision_steer` 直接加到 L2/R0（`0.55 / 0.35`），**不经过 8 s 慢基线**——
+   否则持续威胁会被基线吃掉，果蝇转一下就回正。
+
+实测 `corr(vision_steer, L2-0.5) = 0.90`，L2/R0 会打到 0/1（要的就是戏剧性）。
+捕食者撤离/等待时 `vision_steer` 必须归零（`world.py` 里显式 reset），
+否则会保留上一次的舵量。
+
+**三条噪声轴的感觉输入**：
+
+- 转向 ← 光流（上）
+- 梳理（R1）← 内部 bout：20–60 s 一次、持续 2–5 s，威胁出现立即打断
+- 振翅（R2/V0）← 翅运动群的 tonic（0.10）+ 气流（0.15）+ 本体感觉
+  （上一帧 `V0`，0.05）；只在 `demo/live/flow` 注入，`wind/quiet` 保持纯净
+
+翅群对恒定电流非常陡（amp 0.05→0，0.10→1.33×REF），所以 `wing_gain` 从 1.0
+降到 0.25，靠"低驱动 + 低增益"拿到可调范围（V0 基线约 0.7，按钮/逃逸还能推到 1.0）。
+
+**坑：fancy indexing 的 `out=` 写的是副本。**
+`np.maximum(d[idx], amp, out=d[idx])` 不会改 `d`（`d[idx]` 是 copy），必须写
+`d[idx] = np.maximum(d[idx], amp)`。这个 bug 让光流/翅命令群静默失效了整轮。
+
+**指标面板**：`/metrics` 返回 `rtf / tx_ps / escapes / loom_peak / rates /
+vision / vision_steer / groom / wing_drive / pred_state / pred_d`；右抽屉下半
+渲染 6 个指标 + 8 个关键群放电率条。`rates` 是各群 `net.rate` 均值
+（spikes/ms，前端 ×1000 显示 Hz）。Web 服务按墙钟实时跑，所以 `rtf≈1.0`；
+headless 循环才是 70–96×。
+
+**通路追踪**：启动时把 8126 条边建成 1 跳 `inMap/outMap`；点击神经元后高亮
+上游（青）/下游（琥珀）、其余压暗，并按下游角色映射到影响的轴（`ROLE_AXES`）；
+点击空白/双击清除。追踪模式下突触层只重建一次（`edgeDirty`），不拖帧率。
+
+测试：`test_body.py` 新增 `[7]` 7 项（左/右光流、命令群驱动、梳理 bout、
+翅 tonic/驱动），现在 **33 项**；加 `test_behaviour.py` 的 19 项，共 **52 项**。
+
+---
+
 ## 5. 踩过的坑（按重要性排序，全部是真实调试过程）
 
 ### 5.1 抑制性突触符号写反 ★最严重

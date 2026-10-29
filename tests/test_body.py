@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 
 from body.emu import AXES6, CENTER, EmuDevice, build_line, encode, magnitude
 from body.mapping import LOOM_SYNC_MIN, SixAxisMapper
-from body.world import World
+from body.world import WING_TONIC, World
 from brain.circuit import Circuit
 from brain.lif import build_from_circuit
 
@@ -191,6 +191,47 @@ def main():
     ck(windy["escape_gf"] <= quiet["escape_gf"] + 3,
        f"风不会伪装成逃逸（escape_gf {quiet['escape_gf']} → {windy['escape_gf']}）",
        (quiet, windy))
+
+    print("\n[7] 视觉场 / 光流 / 感觉驱动")
+
+    w = World(c, mode="live", seed=0)
+    w.pred_active = True
+    w.pred_on = True
+    w._leaving = False
+    w._near = False
+    w._px = 8.0
+    w._py = -10.0
+    w._pred_v = 0.0
+    w.step(0)
+    vs_r = w.vision_steer
+    dl = float(w.drive[w.steer_l].max()) if w.steer_l.size else 0.0
+    ck(vs_r < -0.1, f"捕食者在右 → 光流向左转（vs={vs_r:.2f}）", vs_r)
+    ck(dl > 0.1, f"左转命令群被驱动（{dl:.2f}）", dl)
+
+    w._px = -8.0
+    w._py = -10.0
+    w._leaving = False
+    w._near = False
+    w.step(1)
+    vs_l = w.vision_steer
+    dr = float(w.drive[w.steer_r].max()) if w.steer_r.size else 0.0
+    ck(vs_l > 0.1, f"捕食者在左 → 光流向右转（vs={vs_l:.2f}）", vs_l)
+    ck(dr > 0.1, f"右转命令群被驱动（{dr:.2f}）", dr)
+
+    w2 = World(c, mode="live", seed=1)
+    w2.pred_active = False
+    w2._groom_next = 0.0
+    w2.step(2)
+    g = float(w2.drive[w2.groom_idx].max()) if w2.groom_idx.size else 0.0
+    ck(w2.groom_bout and g > 1.0, f"梳理 bout 被触发（drive {g:.2f}）", g)
+
+    w3 = World(c, mode="live", seed=2)
+    w3.pred_active = False
+    w3.step(3)
+    ck(w3.wing_drive >= WING_TONIC,
+       f"翅有 tonic 驱动（{w3.wing_drive:.2f}）", w3.wing_drive)
+    wd = float(w3.drive[w3.wing_idx].max()) if w3.wing_idx.size else 0.0
+    ck(wd > 0.05, f"翅运动群被驱动（{wd:.2f}）", wd)
 
     print("\n" + "-" * 56)
     print(f"结果：{PASS} 项通过，{FAIL} 项失败")

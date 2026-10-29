@@ -66,7 +66,8 @@ def run(ms, scenario, seed, stim, amp, realtime, web, port, out_path,
 
         if t >= next_frame:
             axes = mapper.update(net, gf_any, dt_ms=STEPS_PER_FRAME,
-                                 loom_sync=max(sync_buf))
+                                 loom_sync=max(sync_buf),
+                                 vision_steer=world.vision_steer)
 
 
             world.set_axes(axes, mapper.diag.get("escape", 0.0))

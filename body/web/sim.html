@@ -152,7 +152,23 @@
   #emu3d{flex:1;position:relative;min-height:0;background:#050d0a}
   #emu3d canvas{display:block;cursor:grab}
   #emu3d canvas:active{cursor:grabbing}
-  #dfoot{flex:none;border-top:1px solid var(--line);padding:9px 12px;font-size:10.5px;
+  #dmetrics{flex:none;position:relative;z-index:6;background:var(--panel);
+    border-top:1px solid var(--line);padding:8px 12px;font-size:10px;
+    color:#8fb3a8;max-height:196px;overflow:auto}
+  #dmetrics .mh{font-size:9px;letter-spacing:.14em;color:#5d8177;margin-bottom:6px}
+  #dmetrics .mg{display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;margin-bottom:7px}
+  #dmetrics .mg div{display:flex;justify-content:space-between;gap:6px}
+  #dmetrics .mg b{color:#d6f2e8;font-weight:500;font-variant-numeric:tabular-nums}
+  #dmetrics .mr{display:flex;flex-direction:column;gap:3px}
+  #dmetrics .mr .r{display:flex;align-items:center;gap:6px}
+  #dmetrics .mr .r span{width:74px;color:#7c9e93;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  #dmetrics .mr .r i{flex:1;height:3px;background:#12241e;border-radius:2px;overflow:hidden}
+  #dmetrics .mr .r i b{display:block;height:100%;width:0;background:#38d9d9;border-radius:2px}
+  #dmetrics .mr .r em{width:52px;text-align:right;color:#c8e5dc;font-style:normal;
+    font-variant-numeric:tabular-nums}
+  #dfoot{flex:none;position:relative;z-index:6;background:var(--panel);
+    border-top:1px solid var(--line);padding:9px 12px;font-size:10.5px;
     color:#8fb3a8;line-height:1.9}
   #dfoot .row{display:flex;justify-content:space-between;gap:8px}
   #dfoot .row b{color:#d6f2e8;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -176,6 +192,7 @@
   body.collapsed #strip{display:flex}
   body.collapsed #drawer .dhead,
   body.collapsed #emu3d,
+  body.collapsed #dmetrics,
   body.collapsed #dfoot,
   body.collapsed .frozen{opacity:0;pointer-events:none}
   body.collapsed #drawer .dhead{display:none}
@@ -205,7 +222,7 @@
         <div class="tl"><span id="thLbl">捕食者</span><b id="thVal">—</b></div>
         <div class="tb"><i id="thBar"></i></div>
       </div>
-      <div id="hint">拖动旋转 · 滚轮缩放 · 双击复位 · 点击神经元查看</div>
+      <div id="hint">拖动旋转 · 滚轮缩放 · 双击复位 · 点击神经元追踪上下游</div>
       <aside id="ldrawer">
         <div class="lh"><span>即时刺激</span><span class="sp"></span>
           <button class="btn" id="btnLClose" title="收起">⟨</button></div>
@@ -249,6 +266,18 @@
     <div id="dmask" class="show">
       <div><b>未连接</b>点右上角「连接大脑模型」<br>选模拟器或真机串口</div>
     </div>
+    <div id="dmetrics">
+      <div class="mh">指标</div>
+      <div class="mg">
+        <div><span>实时</span><b id="m-rtf">—</b></div>
+        <div><span>TCode/s</span><b id="m-tx">—</b></div>
+        <div><span>逃逸</span><b id="m-esc">—</b></div>
+        <div><span>loom 峰值</span><b id="m-lo">—</b></div>
+        <div><span>捕食者</span><b id="m-pred">—</b></div>
+        <div><span>光流转向</span><b id="m-vis">—</b></div>
+      </div>
+      <div id="m-rates" class="mr"></div>
+    </div>
     <div id="dfoot">
       <div class="row"><span>连接</span><b id="d-link">—</b></div>
       <div class="row"><span>指令</span><b id="d-tx">0</b></div>
@@ -282,11 +311,27 @@ const ROLE_CN = {
   ascending:"上行神经元", wind:"江氏器 JO", jo_down:"JO 中继", partner:"伙伴中间神经元"
 };
 
+const ROLE_AXES = {
+  loom_lc4:["L0","V0"], loom_lplc2:["L0","V0"], escape_gf:["L0","L1","V0"],
+  forward:["L1"], backward:["L1"], steer_left:["L2","R0"], steer_right:["L2","R0"],
+  groom:["R1"], wing_a:["L0","R2","V0"], wing_b:["L0","R2","V0"],
+  wing_c:["L0","R2","V0"], wind:["R2","V0"], jo_down:["R2","V0"],
+  ascending:[], partner:[]
+};
+
+const REF_RATE = {
+  backward:0.0026, forward:0.0010, steer_left:0.0026, steer_right:0.0024,
+  groom:0.0013, wing_a:0.0011, wing_b:0.0013, wing_c:0.0005
+};
+const MROLES = ["loom_lc4","loom_lplc2","escape_gf","forward",
+                "steer_left","steer_right","groom","wing_a"];
+
 
 const ST = {
   brain:null, cum:null, active:new Set(),
   link:null, hz:0, neurons:0, synapses:0,
-  rotating:true, fps:0, t:0
+  rotating:true, fps:0, t:0,
+  trace:null, inMap:null, outMap:null
 };
 const $ = (s) => document.querySelector(s);
 
@@ -301,6 +346,19 @@ const bars = {};
       <div class="bar"><div class="mid"></div><div class="fill" id="f-${k}"></div></div>`;
     host.appendChild(d);
     bars[k] = {fill:d.querySelector(`#f-${k}`), val:d.querySelector(`#v-${k}`)};
+  }
+}
+
+
+const mRateEls = {};
+{
+  const host = $("#m-rates");
+  for (const r of MROLES){
+    const d = document.createElement("div");
+    d.className = "r";
+    d.innerHTML = `<span>${ROLE_CN[r] || r}</span><i><b></b></i><em>—</em>`;
+    host.appendChild(d);
+    mRateEls[r] = {bar:d.querySelector("b"), val:d.querySelector("em")};
   }
 }
 
@@ -524,18 +582,45 @@ function drawEdgesLayer(pj){
   ectx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ectx.lineWidth = 0.55;
   const e = b.edges;
-  
-  for (const sign of [1, 0]){
+  const tr = ST.trace;
+  if (!tr){
+    
+    for (const sign of [1, 0]){
+      ectx.beginPath();
+      ectx.strokeStyle = sign ? "rgba(56,190,160,0.13)" : "rgba(210,90,90,0.11)";
+      for (let i = 0; i < e.length; i++){
+        const ed = e[i];
+        if (ed[2] !== sign) continue;
+        const a = ed[0]*2, c = ed[1]*2;
+        ectx.moveTo(pj[a], pj[a+1]);
+        ectx.lineTo(pj[c], pj[c+1]);
+      }
+      ectx.stroke();
+    }
+  }else{
+    
     ectx.beginPath();
-    ectx.strokeStyle = sign ? "rgba(56,190,160,0.13)" : "rgba(210,90,90,0.11)";
+    ectx.strokeStyle = "rgba(56,190,160,0.035)";
     for (let i = 0; i < e.length; i++){
       const ed = e[i];
-      if (ed[2] !== sign) continue;
       const a = ed[0]*2, c = ed[1]*2;
       ectx.moveTo(pj[a], pj[a+1]);
       ectx.lineTo(pj[c], pj[c+1]);
     }
     ectx.stroke();
+    for (const [incoming, col] of [[true, "rgba(56,217,217,0.6)"],
+                                   [false, "rgba(245,166,35,0.6)"]]){
+      ectx.beginPath();
+      ectx.strokeStyle = col;
+      for (let i = 0; i < e.length; i++){
+        const ed = e[i];
+        if (incoming ? ed[1] !== tr.c : ed[0] !== tr.c) continue;
+        const a = ed[0]*2, c = ed[1]*2;
+        ectx.moveTo(pj[a], pj[a+1]);
+        ectx.lineTo(pj[c], pj[c+1]);
+      }
+      ectx.stroke();
+    }
   }
 }
 
@@ -544,26 +629,40 @@ function drawNodes(pj){
   if (!b || !pj) return;
   const dpr = CAM.dpr;
   const n = b.n, role = b.role, cum = ST.cum;
+  const tr = ST.trace;
   ctx.save();
   ctx.setTransform(dpr,0,0,dpr,0,0);
 
   for (let i = 0; i < n; i++){
     const x = pj[i*2], y = pj[i*2+1];
     if (x < -20 || y < -20 || x > CAM.w+20 || y > CAM.h+20) continue;
-    const c = cum ? cum[i] : 0;
-    const heat = c > 0 ? Math.min(1, Math.log1p(c) / 6) : 0;
-    let r = 1.5 + heat * 2.1;
-    const on = ST.active.has(i);
-    if (on) r += 2.4;
+
+    let r, fill, alpha, ring = false;
+    if (tr){
+      if (i === tr.c){ r = 5.2; fill = "#ffffff"; alpha = 1; ring = true; }
+      else if (tr.up.has(i)){ r = 3.6; fill = "#38d9d9"; alpha = .95; }
+      else if (tr.down.has(i)){ r = 3.6; fill = "#f5a623"; alpha = .95; }
+      else { r = 1.0; fill = "#4a6e64"; alpha = .10; }
+    }else{
+      const c = cum ? cum[i] : 0;
+      const heat = c > 0 ? Math.min(1, Math.log1p(c) / 6) : 0;
+      r = 1.5 + heat * 2.1;
+      const on = ST.active.has(i);
+      if (on) r += 2.4;
+      fill = on ? "#ffffff"
+                : (heat > 0 ? ROLE_COLOR[role[i]] || "#3d5a52"
+                            : "rgba(70,110,100,0.55)");
+      alpha = on ? 1 : (0.35 + heat * 0.62);
+      ring = on;
+    }
 
     ctx.beginPath();
     ctx.arc(x, y, r, 0, 6.2832);
-    ctx.fillStyle = on ? "#ffffff"
-                       : (heat > 0 ? ROLE_COLOR[role[i]] || "#3d5a52" : "rgba(70,110,100,0.55)");
-    ctx.globalAlpha = on ? 1 : (0.35 + heat * 0.62);
+    ctx.fillStyle = fill;
+    ctx.globalAlpha = alpha;
     ctx.fill();
 
-    if (on){
+    if (ring){
       ctx.beginPath();
       ctx.arc(x, y, r + 5.5, 0, 6.2832);
       ctx.strokeStyle = "rgba(255,255,255,0.42)";
@@ -632,7 +731,9 @@ cv.addEventListener("wheel", (e)=>{
   edgeDirty = true;
 }, {passive:false});
 cv.addEventListener("dblclick", ()=>{
-  CAM.yaw = -0.55; CAM.pitch = 0.32; CAM.zoom = 1; edgeDirty = true;
+  CAM.yaw = -0.55; CAM.pitch = 0.32; CAM.zoom = 1;
+  ST.trace = null; edgeDirty = true;
+  $("#tip").style.display = "none";
 });
 
 function pick(e){
@@ -646,7 +747,12 @@ function pick(e){
     if (d < bd){ bd = d; best = i; }
   }
   const tip = $("#tip");
-  if (best < 0){ tip.style.display = "none"; return; }
+  if (best < 0){
+    ST.trace = null;
+    edgeDirty = true;
+    tip.style.display = "none";
+    return;
+  }
   const b = ST.brain;
   
   const vx = (b.vox && b.vox[best]) || [0, 0, 0];
@@ -657,13 +763,32 @@ function pick(e){
     if (e[1] === best) din++;
     if (e[0] === best) dout++;
   }
+  
+  const up = new Set(ST.inMap ? (ST.inMap.get(best) || []) : []);
+  const down = new Set(ST.outMap ? (ST.outMap.get(best) || []) : []);
+  const axisCount = {};
+  for (const i of down){
+    for (const a of (ROLE_AXES[b.role[i]] || [])){
+      axisCount[a] = (axisCount[a] || 0) + 1;
+    }
+  }
+  for (const a of (ROLE_AXES[b.role[best]] || [])){
+    axisCount[a] = (axisCount[a] || 0) + 2;
+  }
+  const axes = Object.entries(axisCount)
+    .sort((x, y) => y[1] - x[1]).slice(0, 3).map((x) => x[0]);
+  ST.trace = {c:best, up, down, axes};
+  edgeDirty = true;
+
   tip.innerHTML =
     `<b>#${best}</b> ${ROLE_CN[b.role[best]] || b.role[best] || "—"}<br>
      <span class="k">类型</span> ${b.type[best] || "—"}<br>
      <span class="k">侧别</span> ${b.side[best] || "—"}<br>
      <span class="k">坐标</span> ${vx[0]}, ${vx[1]}, ${vx[2]}<br>
      <span class="k">突触</span> 入 ${din} / 出 ${dout}<br>
-     <span class="k">累计放电</span> ${ST.cum ? ST.cum[best] : 0}`;
+     <span class="k">上游</span> ${up.size} · <span class="k">下游</span> ${down.size}<br>
+     <span class="k">影响轴</span> ${axes.length ? axes.join(" · ") : "—"}<br>
+     <span class="k">提示</span> 点击空白清除追踪`;
   tip.style.display = "block";
   const tw = 200;
   tip.style.left = Math.min(r.width - tw - 12, Math.max(8, mx + 14)) + "px";
@@ -906,6 +1031,32 @@ async function poll(){
 
     $("#d-t").textContent = s.frame.t + " ms";
     $("#d-tx").textContent = s.frame.tx || 0;
+
+    
+    const M = s.metrics || {};
+    $("#m-rtf").textContent = M.rtf != null ? M.rtf.toFixed(1) + "×" : "—";
+    $("#m-tx").textContent = M.tx_ps != null ? M.tx_ps.toFixed(1) : "—";
+    $("#m-esc").textContent = M.escapes != null ? M.escapes : "—";
+    $("#m-lo").textContent = M.loom_peak != null ? M.loom_peak : "—";
+    $("#m-pred").textContent = M.pred_state
+      ? M.pred_state + " " + (M.pred_d != null ? M.pred_d.toFixed(1) : "—")
+      : "—";
+    const vs = M.vision_steer;
+    if (typeof vs === "number"){
+      $("#m-vis").textContent = (vs >= 0 ? "→ " : "← ") + Math.abs(vs).toFixed(2);
+      $("#m-vis").style.color = vs >= 0 ? "#f5a623" : "#38d9d9";
+    }else{
+      $("#m-vis").textContent = "—";
+      $("#m-vis").style.color = "";
+    }
+    const rates = M.rates || {};
+    for (const r of MROLES){
+      const v = rates[r] || 0;
+      const ref = REF_RATE[r] || 0.002;
+      mRateEls[r].bar.style.width =
+        Math.min(100, (v / ref) * 40).toFixed(0) + "%";
+      mRateEls[r].val.textContent = (v * 1000).toFixed(2);
+    }
     $("#led").className = "led live";
 
     const L = s.link || {};
@@ -929,6 +1080,16 @@ async function boot(){
   try{
     const r = await fetch("/brain", {cache:"no-store"});
     ST.brain = await r.json();
+    
+    const inMap = new Map(), outMap = new Map();
+    for (const e of ST.brain.edges){
+      if (!outMap.has(e[0])) outMap.set(e[0], []);
+      outMap.get(e[0]).push(e[1]);
+      if (!inMap.has(e[1])) inMap.set(e[1], []);
+      inMap.get(e[1]).push(e[0]);
+    }
+    ST.inMap = inMap;
+    ST.outMap = outMap;
   }catch(e){
     $("#sub").textContent = "脑拓扑加载失败";
   }
