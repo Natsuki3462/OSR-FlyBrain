@@ -1,0 +1,18 @@
+data/circuit.json — data license and attribution
+=================================================
+
+This file is a functional sub-circuit derived from the FlyWire whole-brain
+connectome (v783).
+
+  Source:   https://flywire.ai/
+  Citation: Dorkenwald et al., "Neuronal wiring diagram of an adult brain",
+            Nature, 2024.
+  License:  Creative Commons Attribution-NonCommercial 4.0 International
+            (CC BY-NC 4.0)
+            https://creativecommons.org/licenses/by-nc/4.0/
+
+You are free to share and adapt this data for non-commercial purposes,
+provided you give appropriate credit and indicate changes.
+
+This data is NOT covered by the repository's Apache License 2.0. Commercial
+use requires separate permission from the FlyWire data providers.

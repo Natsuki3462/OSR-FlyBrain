@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 运行产物 / 临时文件
+data/raw/
+data/circuit_*_backup.json
+*.log
+*.tmp
+state_tmp.json
+page_tmp.html
+s[0-9]*.json
+
+# 调试用的浏览器 profile
+_edgeprofile/
+
+# 系统
+.DS_Store
+Thumbs.db

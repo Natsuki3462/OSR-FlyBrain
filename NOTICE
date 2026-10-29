@@ -1,0 +1,20 @@
+OSR-FlyBrain
+Copyright 2026 natsuk3462
+
+This product includes material derived from the FlyWire connectome.
+
+FlyWire whole-brain connectome (v783)
+  Source:   https://flywire.ai/
+  Citation: Dorkenwald et al., "Neuronal wiring diagram of an adult brain",
+            Nature, 2024.
+  License:  Creative Commons Attribution-NonCommercial 4.0 International
+            (CC BY-NC 4.0)
+            https://creativecommons.org/licenses/by-nc/4.0/
+
+The derived circuit file data/circuit.json is distributed under CC BY-NC 4.0.
+It is NOT covered by the Apache License 2.0 that applies to the source code.
+Commercial use of the data requires separate permission from the FlyWire
+data providers.
+
+TCode protocol reference:
+  https://github.com/multiaxis/TCode-Specification

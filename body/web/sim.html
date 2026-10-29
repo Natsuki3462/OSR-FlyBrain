@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OSR-FlyBrain · 果蝇脑实时活动</title>
+<style>
+  :root{
+    --bg:#06110c; --panel:#0a1511; --line:#16302a; --txt:#c8e5dc;
+    --dim:#7c9e93; --cy:#38d9d9; --am:#f5a623; --rd:#ff5d5d; --gr:#4ade80;
+    --drawer:392px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font:13px/1.5 ui-monospace,"Cascadia Code",Consolas,"Noto Sans Mono CJK SC",monospace;
+    overflow:hidden}
+
+  #app{display:grid;grid-template-columns:1fr var(--drawer);height:100vh;
+    transition:grid-template-columns .28s cubic-bezier(.4,0,.2,1)}
+  body.collapsed #app{grid-template-columns:1fr 56px}
+
+  
+  #main{position:relative;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+
+  #top{flex:none;display:flex;align-items:center;gap:10px;
+    padding:10px 16px;border-bottom:1px solid var(--line);background:rgba(0,0,0,.25);
+    position:relative;z-index:30}
+  #top h1{margin:0;font-size:13px;font-weight:600;letter-spacing:.05em;color:#e8fff7;white-space:nowrap}
+  #top .sub{font-size:11px;color:var(--dim);white-space:nowrap}
+  .sp{flex:1}
+
+  .btn{font:inherit;font-size:12px;padding:6px 12px;border-radius:7px;cursor:pointer;
+    background:#12241e;border:1px solid var(--line);color:var(--txt);
+    display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
+    transition:background .15s,border-color .15s}
+  .btn:hover{background:#183029;border-color:#2a4c42}
+  .btn.on{background:rgba(74,222,128,.13);border-color:rgba(74,222,128,.55);color:#b9f6ce}
+  .btn.bad{background:rgba(255,93,93,.12);border-color:rgba(255,93,93,.5);color:#ffb0a8}
+  .btn[disabled]{opacity:.5;cursor:default}
+
+  .led{width:7px;height:7px;border-radius:50%;background:#4a6b62;flex:none}
+  .led.live{background:var(--gr);box-shadow:0 0 8px var(--gr);animation:p 1.6s infinite}
+  .led.wait{background:var(--am);box-shadow:0 0 8px var(--am);animation:p .9s infinite}
+  .led.err{background:var(--rd);box-shadow:0 0 8px var(--rd)}
+  @keyframes p{50%{opacity:.25}}
+
+  
+  #menu{position:absolute;top:calc(100% - 4px);right:16px;width:320px;z-index:60;
+    background:#0d1c17;border:1px solid #21443a;border-radius:12px;padding:8px;
+    box-shadow:0 22px 50px rgba(0,0,0,.62)}
+  #menu[hidden]{display:none}
+  #menu .mi{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;
+    cursor:pointer;font-size:12px}
+  #menu .mi:hover{background:#14291f}
+  #menu .mi .ic{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;
+    background:#173029;color:#7fd6c4;font-size:11px;flex:none}
+  #menu .mi small{display:block;color:var(--dim);font-size:10px;margin-top:1px}
+  #menu .hd{font-size:10px;letter-spacing:.12em;color:var(--dim);padding:8px 10px 4px}
+  #menu .ports{max-height:190px;overflow:auto;margin:2px 0 4px}
+  #menu .port{padding:7px 10px 7px 40px;border-radius:7px;cursor:pointer;font-size:11px}
+  #menu .port:hover{background:#14291f}
+  #menu .port b{color:#cfe9e0;font-weight:500}
+  #menu .port span{color:var(--dim)}
+  #menu .tag{font-size:9px;padding:1px 5px;border-radius:4px;margin-left:6px;
+    background:rgba(74,222,128,.16);color:#9df0bb}
+  #menu .sep{height:1px;background:var(--line);margin:6px 4px}
+  #menu .err{font-size:11px;color:#ffb0a8;padding:6px 10px;line-height:1.6;word-break:break-all}
+
+  
+  #stage{position:relative;flex:1;min-height:0;overflow:hidden;
+    background:radial-gradient(circle at 50% 45%,#081814 0%,#050d0a 68%)}
+  #brain{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab}
+  #brain:active{cursor:grabbing}
+
+  #hint{position:absolute;left:16px;bottom:12px;font-size:10px;color:#5d8177;
+    pointer-events:none;letter-spacing:.03em}
+
+  
+  #threat{position:absolute;left:16px;top:14px;z-index:15;
+    background:rgba(6,18,14,.82);border:1px solid #23463a;border-radius:9px;
+    padding:7px 10px 8px;min-width:136px;backdrop-filter:blur(3px);
+    opacity:0;transform:translateY(-4px);
+    transition:opacity .25s,transform .25s,border-color .15s,left .26s}
+  body.lopen #threat{left:224px}
+  #threat.on{opacity:1;transform:none}
+  #threat .tl{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+    font-size:9px;letter-spacing:.14em;color:var(--dim);margin-bottom:5px}
+  #threat .tl b{color:var(--txt);font-weight:500;letter-spacing:0;font-size:12px;
+    font-variant-numeric:tabular-nums}
+  #threat .tb{height:5px;border-radius:3px;background:#11211c;overflow:hidden}
+  #threat .tb i{display:block;height:100%;width:0;border-radius:3px;background:var(--gr);
+    transition:width .08s linear,background .15s}
+  #threat.warn .tb i{background:var(--am)}
+  #threat.hot{border-color:#5a2a2a;box-shadow:0 0 18px rgba(255,93,93,.16)}
+  #threat.hot .tb i{background:var(--rd)}
+  #threat.hot .tl b{color:#ff9a92}
+  #threat.idle{opacity:.5}
+  #threat.idle .tb i{background:#2a443b}
+
+  
+  #ldrawer{position:absolute;left:0;top:0;bottom:0;width:214px;z-index:18;
+    background:rgba(7,19,15,.95);border-right:1px solid var(--line);
+    backdrop-filter:blur(4px);display:flex;flex-direction:column;
+    transform:translateX(-100%);transition:transform .26s cubic-bezier(.4,0,.2,1);
+    pointer-events:none}
+  body.lopen #ldrawer{transform:none;pointer-events:auto}
+  #ldrawer .lh{flex:none;display:flex;align-items:center;gap:8px;padding:9px 12px;
+    border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.08em;color:#c3e4d8}
+  #ldrawer .lh .sp{flex:1}
+  #ldrawer .lbody{flex:1;overflow:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
+  #ldrawer .stim{text-align:left;background:#0c1c17;border:1px solid #1d3a31;
+    border-radius:9px;padding:9px 11px;color:var(--txt);cursor:pointer;font:inherit;
+    transition:background .15s,border-color .15s,transform .06s}
+  #ldrawer .stim:hover{background:#11281f;border-color:#2c5a4c}
+  #ldrawer .stim:active{transform:scale(.985)}
+  #ldrawer .stim b{display:block;font-size:12.5px;font-weight:600;color:#e2fff5}
+  #ldrawer .stim small{display:block;font-size:9.5px;color:var(--dim);margin-top:2px;line-height:1.5}
+  #ldrawer .stim.hit{border-color:#3fbf8f;background:#123026}
+  #btnLTab{position:absolute;left:0;top:50%;transform:translateY(-50%);z-index:19;
+    border-radius:0 9px 9px 0;border-left:none;padding:9px 6px 9px 5px;
+    writing-mode:vertical-rl;letter-spacing:.16em;font-size:10px;color:#a8ccc0}
+  body.lopen #btnLTab{opacity:0;pointer-events:none}
+
+  #tip{position:absolute;z-index:20;pointer-events:none;display:none;
+    background:rgba(8,22,18,.95);border:1px solid #2a4c42;border-radius:8px;
+    padding:8px 10px;font-size:11px;line-height:1.7;min-width:150px}
+  #tip b{color:#d8fff2;font-weight:500}
+  #tip .k{color:var(--dim)}
+
+  
+  #foot{flex:none;border-top:1px solid var(--line);background:rgba(0,0,0,.3);
+    display:flex;align-items:stretch;gap:14px;padding:9px 16px}
+  #axes{display:grid;grid-template-columns:repeat(7,minmax(64px,1fr));gap:10px;flex:1;min-width:0}
+  .ax{min-width:0}
+  .ax .hd{display:flex;justify-content:space-between;font-size:10px;color:#8fb3a8;margin-bottom:3px}
+  .ax .hd b{color:#c8e5dc;font-weight:500;font-variant-numeric:tabular-nums}
+  .ax .bar{height:5px;background:#12241e;border-radius:3px;position:relative;overflow:hidden}
+  .ax .mid{position:absolute;left:50%;top:0;bottom:0;width:1px;background:#26463d}
+  .ax .fill{position:absolute;top:0;bottom:0;left:0;border-radius:3px;transition:width .05s linear}
+  #tcbox{flex:none;width:300px;font-size:10px;color:#6d9187;line-height:1.55;
+    border-left:1px solid var(--line);padding-left:14px;overflow:hidden}
+  #tcbox .lbl{color:#5d8177;letter-spacing:.14em;font-size:9px;margin-bottom:2px}
+  #tcbox .val{color:#a8ccc0;word-break:break-all;max-height:34px;overflow:hidden}
+  #tcbox .val.pending{color:#7a6a3a}
+
+  
+  #drawer{position:relative;border-left:1px solid var(--line);background:var(--panel);
+    display:flex;flex-direction:column;overflow:hidden;min-width:0}
+  #drawer .dhead{flex:none;display:flex;align-items:center;gap:8px;padding:9px 12px;
+    border-bottom:1px solid var(--line);font-size:11px;color:var(--dim);white-space:nowrap}
+  #drawer .dhead .t{color:#c3e4d8;font-size:11px;letter-spacing:.06em;font-weight:500}
+  #emu3d{flex:1;position:relative;min-height:0;background:#050d0a}
+  #emu3d canvas{display:block;cursor:grab}
+  #emu3d canvas:active{cursor:grabbing}
+  #dfoot{flex:none;border-top:1px solid var(--line);padding:9px 12px;font-size:10.5px;
+    color:#8fb3a8;line-height:1.9}
+  #dfoot .row{display:flex;justify-content:space-between;gap:8px}
+  #dfoot .row b{color:#d6f2e8;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  #dmask{position:absolute;inset:0;display:none;place-items:center;text-align:center;
+    background:rgba(5,13,10,.9);color:#7c9e93;font-size:11.5px;line-height:2;padding:24px;z-index:5}
+  #dmask.show{display:grid}
+  #dmask b{display:block;color:#c3e4d8;font-size:12.5px;font-weight:500;margin-bottom:8px}
+
+  .frozen{position:absolute;top:10px;left:10px;right:10px;z-index:6;display:none;
+    font-size:10px;letter-spacing:.06em;color:#ffd0c8;text-align:center;
+    padding:6px 8px;border-radius:7px;background:rgba(60,12,12,.78);
+    border:1px solid rgba(255,120,110,.42);line-height:1.6}
+  body.real .frozen{display:block}
+  body.real #emu3d{filter:grayscale(.85) brightness(.55)}
+
+  #strip{display:none;position:absolute;inset:0;flex-direction:column;
+    align-items:center;justify-content:center;gap:12px;cursor:pointer}
+  #strip span{writing-mode:vertical-rl;font-size:11px;letter-spacing:.22em;
+    color:var(--dim);font-weight:600}
+  body.collapsed #strip{display:flex}
+  body.collapsed #drawer .dhead,
+  body.collapsed #emu3d,
+  body.collapsed #dfoot,
+  body.collapsed .frozen{opacity:0;pointer-events:none}
+  body.collapsed #drawer .dhead{display:none}
+  
+  body.collapsed #dmask{display:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="main">
+    <div id="top">
+      <span class="led" id="led"></span>
+      <h1>果蝇脑实时活动</h1>
+      <span class="sub" id="sub">载入中…</span>
+      <span class="sp"></span>
+      <button class="btn" id="btnRot" title="自动旋转视角">⟳ 旋转</button>
+      <button class="btn" id="btnLink">
+        <span class="led" id="led2"></span><span id="linkTxt">连接大脑模型</span>
+      </button>
+      <div id="menu" hidden></div>
+    </div>
+
+    <div id="stage">
+      <canvas id="brain"></canvas>
+      <div id="tip"></div>
+      <div id="threat">
+        <div class="tl"><span id="thLbl">捕食者</span><b id="thVal">—</b></div>
+        <div class="tb"><i id="thBar"></i></div>
+      </div>
+      <div id="hint">拖动旋转 · 滚轮缩放 · 双击复位 · 点击神经元查看</div>
+      <aside id="ldrawer">
+        <div class="lh"><span>即时刺激</span><span class="sp"></span>
+          <button class="btn" id="btnLClose" title="收起">⟨</button></div>
+        <div class="lbody">
+          <button class="stim" data-stim="loom"><b>立即惊吓</b>
+            <small>LC4 / LPLC2 同步脉冲 → 巨纤维逃逸</small></button>
+          <button class="stim" data-stim="food"><b>食物诱惑</b>
+            <small>DNp09 前进群 → 前趋（子图无嗅觉通路，代理）</small></button>
+          <button class="stim" data-stim="wind"><b>一阵风</b>
+            <small>JO 风感 → 翅 / 俯仰</small></button>
+          <button class="stim" data-stim="flow"><b>持续气流</b>
+            <small>气流 → DNp09 持续前进</small></button>
+          <button class="stim" data-stim="wing"><b>振翅</b>
+            <small>翅运动群 → V0 / L0</small></button>
+          <button class="stim" data-stim="groom"><b>梳理</b>
+            <small>DNg11 → R1 滚转摆动</small></button>
+          <button class="stim" data-stim="backward"><b>后退</b>
+            <small>MDN → L1 后退</small></button>
+        </div>
+      </aside>
+      <button id="btnLTab" class="btn" title="打开刺激面板">▸ 刺激</button>
+    </div>
+
+    <div id="foot">
+      <div id="axes"></div>
+      <div id="tcbox">
+        <div class="lbl" id="tclbl">TCODE</div>
+        <div class="val pending" id="tc">—</div>
+      </div>
+    </div>
+  </div>
+
+  <aside id="drawer">
+    <div class="dhead">
+      <span class="t">OSR6 模型</span>
+      <span class="sp"></span>
+      <button class="btn" id="btnFold" title="收起抽屉">⟩</button>
+    </div>
+    <div id="emu3d"></div>
+    <div class="frozen">真机模式 · 模拟视图已冻结<br>动作正在真实设备上执行</div>
+    <div id="dmask" class="show">
+      <div><b>未连接</b>点右上角「连接大脑模型」<br>选模拟器或真机串口</div>
+    </div>
+    <div id="dfoot">
+      <div class="row"><span>连接</span><b id="d-link">—</b></div>
+      <div class="row"><span>指令</span><b id="d-tx">0</b></div>
+      <div class="row"><span>帧</span><b id="d-t">0 ms</b></div>
+    </div>
+    <div id="strip"><button class="btn" id="btnUnfold">⟨</button><span>OSR6 模型</span></div>
+  </aside>
+</div>
+
+<script src="/vendor/osr-emu.dist.min.js"></script>
+<script>
+"use strict";
+
+
+const AX = [["L0","上下"],["L1","前后"],["L2","左右"],
+            ["R0","旋转"],["R1","滚转"],["R2","俯仰"],["V0","振动"]];
+
+const ROLE_COLOR = {
+  loom_lc4:"#38d9d9", loom_lplc2:"#2f9ec4", escape_gf:"#ff5d5d",
+  steer_left:"#f5a623", steer_right:"#f5a623", forward:"#4ade80",
+  backward:"#f472b6", groom:"#a78bfa",
+  wing_a:"#fbbf24", wing_b:"#fbbf24", wing_c:"#fbbf24",
+  ascending:"#93a7a0", wind:"#67e8f9", jo_down:"#22d3ee",
+  partner:"#3d5a52", "":"#3d5a52"
+};
+const ROLE_CN = {
+  loom_lc4:"LC4 逼近物", loom_lplc2:"LPLC2 逼近物", escape_gf:"巨纤维 DNp01",
+  steer_left:"左转 DNa01", steer_right:"右转 DNa02", forward:"前进 DNp09",
+  backward:"倒退 MDN", groom:"梳理 DNg11",
+  wing_a:"振翅 DNp02", wing_b:"振翅 DNp04", wing_c:"振翅 DNp11",
+  ascending:"上行神经元", wind:"江氏器 JO", jo_down:"JO 中继", partner:"伙伴中间神经元"
+};
+
+
+const ST = {
+  brain:null, cum:null, active:new Set(),
+  link:null, hz:0, neurons:0, synapses:0,
+  rotating:true, fps:0, t:0
+};
+const $ = (s) => document.querySelector(s);
+
+
+const bars = {};
+{
+  const host = $("#axes");
+  for (const [k, cn] of AX) {
+    const d = document.createElement("div");
+    d.className = "ax";
+    d.innerHTML = `<div class="hd"><span>${k} ${cn}</span><b id="v-${k}">.50</b></div>
+      <div class="bar"><div class="mid"></div><div class="fill" id="f-${k}"></div></div>`;
+    host.appendChild(d);
+    bars[k] = {fill:d.querySelector(`#f-${k}`), val:d.querySelector(`#v-${k}`)};
+  }
+}
+
+
+const EMU = {inst:null, ok:false, sig:"", tried:false};
+
+function emuInit(){
+  if (EMU.tried) return EMU.ok;
+  EMU.tried = true;
+  const host = $("#emu3d");
+  if (typeof window.OSREmulator !== "function"){
+    mask("3D 模型库未加载", "检查 body/web/vendor/osr-emu.dist.min.js");
+    return false;
+  }
+  try{
+    const inst = new window.OSREmulator(host, { model:"SR6" });
+    if (inst.renderer){
+      inst.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      inst.renderer.setClearColor(0x050d0a, 1);
+    }
+    if (inst.controls){
+      inst.controls.enableDamping = true;
+      inst.controls.dampingFactor = .12;
+      inst.controls.minDistance = 120;
+      inst.controls.maxDistance = 700;
+      inst.controls.saveState();
+    }
+    EMU.inst = inst; EMU.ok = true;
+    host.addEventListener("dblclick", emuFit);
+    requestAnimationFrame(()=>window.dispatchEvent(new Event("resize")));
+    setTimeout(emuFit, 150);
+    return true;
+  }catch(e){
+    mask("3D 初始化失败", String(e && e.message ? e.message : e));
+    return false;
+  }
+}
+
+
+
+
+
+
+
+function emuFit(){
+  const i = EMU.inst;
+  if (!i || !i.camera || !i.scene) return;
+  const host = $("#emu3d").getBoundingClientRect();
+  if (host.width < 120 || host.height < 120) return;   
+
+  const cam = i.camera;
+  i.scene.updateMatrixWorld(true);
+
+  const pts = [];
+  let lo = null, hi = null;
+  i.scene.traverse((o)=>{
+    if (!o.isMesh || !o.geometry || !o.visible) return;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    const b = o.geometry.boundingBox;
+    for (let k = 0; k < 8; k++){
+      const v = cam.position.clone().set(
+        (k & 1) ? b.max.x : b.min.x,
+        (k & 2) ? b.max.y : b.min.y,
+        (k & 4) ? b.max.z : b.min.z).applyMatrix4(o.matrixWorld);
+      pts.push(v);
+      lo = lo ? lo.min(v) : v.clone();
+      hi = hi ? hi.max(v) : v.clone();
+    }
+  });
+  if (!pts.length) return;
+
+  const c = lo.clone().add(hi).multiplyScalar(.5);
+  let r = 1;
+  for (const p of pts) r = Math.max(r, p.distanceTo(c));
+
+  
+  const dir = cam.position.clone().sub(i.controls ? i.controls.target : c);
+  if (dir.length() < 1e-6) dir.set(.62, .5, .6);
+  dir.normalize();
+
+  
+  const f = dir.clone().multiplyScalar(-1);                 
+  let right = f.clone().cross(cam.position.clone().set(0, 1, 0));
+  if (right.length() < 1e-6) right = f.clone().cross(cam.position.clone().set(0, 0, 1));
+  right.normalize();
+  const up = right.clone().cross(f).normalize();
+
+  cam.aspect = host.width / host.height;
+  const vfov = cam.fov * Math.PI / 180;
+  const hfov = 2 * Math.atan(Math.tan(vfov / 2) * cam.aspect);
+  const th = Math.tan(hfov / 2), tv = Math.tan(vfov / 2);
+
+  
+  
+  let d = 0;
+  for (const p of pts){
+    const q = p.clone().sub(c);
+    const dz = q.dot(dir);
+    d = Math.max(d,
+                 dz + Math.abs(q.dot(right)) / th,
+                 dz + Math.abs(q.dot(up))    / tv);
+  }
+  
+  
+  
+  d *= 1.10;
+
+  cam.position.copy(c).add(dir.multiplyScalar(d));
+  cam.near = Math.max(.1, d * .05);
+  cam.far  = Math.max(cam.far, d + r * 3);
+  cam.updateProjectionMatrix();
+  if (i.controls){
+    i.controls.target.copy(c);
+    i.controls.minDistance = d * .45;
+    i.controls.maxDistance = d * 2.4;
+    i.controls.update();
+    if (i.controls.saveState) i.controls.saveState();
+  }
+}
+
+function emuFeed(ax){
+  const inst = EMU.inst;
+  if (!inst || !EMU.ok) return;
+  const parts = [];
+  for (const [k] of AX){
+    const v = ax[k];
+    if (v === undefined || v === null) continue;
+    const n = Math.min(9999, Math.max(0, Math.round(v*10000)));
+    parts.push(k + String(n).padStart(4,"0"));
+  }
+  if (!parts.length) return;
+  const sig = parts.join(" ");
+  if (sig === EMU.sig) return;
+  EMU.sig = sig;
+  inst.write(sig + "\n");
+}
+
+function mask(title, body){
+  const m = $("#dmask");
+  const sig = title + "|" + (body || "");
+  m.classList.add("show");
+  if (m.dataset.sig === sig) return;
+  m.dataset.sig = sig;
+  m.innerHTML = `<div><b>${title}</b>${body || ""}</div>`;
+}
+function unmask(){
+  const m = $("#dmask");
+  m.classList.remove("show");
+  m.dataset.sig = "";
+}
+
+
+const cv = $("#brain");
+const ctx = cv.getContext("2d");
+
+const eCanvas = document.createElement("canvas");
+const ectx = eCanvas.getContext("2d");
+const CAM = {yaw:-0.55, pitch:0.32, zoom:1, dpr:1, w:0, h:0};
+
+let PROJ = null;          
+let edgeDirty = true;
+
+let fitTimer = 0;
+let autoFolded = false;   
+
+function resize(){
+  const r = cv.parentElement.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  CAM.dpr = dpr; CAM.w = r.width; CAM.h = r.height;
+  cv.width = Math.max(1, Math.round(r.width * dpr));
+  cv.height = Math.max(1, Math.round(r.height * dpr));
+  edgeDirty = true;
+  if (EMU.ok){
+    
+    
+    
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(emuFit, 90);
+  }
+  
+  
+  
+  if (!autoFolded && window.innerWidth < 1000 &&
+      !document.body.classList.contains("collapsed")){
+    autoFolded = true;
+    fold(true);
+  }
+}
+window.addEventListener("resize", resize);
+
+function project(){
+  const b = ST.brain;
+  if (!b) return null;
+  const n = b.n, pos = b.pos;
+  const cy = Math.cos(CAM.yaw), sy = Math.sin(CAM.yaw);
+  const cp = Math.cos(CAM.pitch), sp = Math.sin(CAM.pitch);
+  const scale = Math.min(CAM.w, CAM.h) * 0.54 * CAM.zoom;
+  const ox = CAM.w * 0.5, oy = CAM.h * 0.5;
+  const out = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++){
+    const x = pos[i][0], y = pos[i][1], z = pos[i][2];
+    const x1 =  x*cy - z*sy;
+    const z1 =  x*sy + z*cy;
+    const y1 =  y*cp - z1*sp;
+    out[i*2]   = ox + x1*scale;
+    out[i*2+1] = oy + y1*scale;
+  }
+  return out;
+}
+
+function drawEdgesLayer(pj){
+  const b = ST.brain;
+  if (!b || !pj) return;
+  if (eCanvas.width !== cv.width || eCanvas.height !== cv.height){
+    eCanvas.width = cv.width;
+    eCanvas.height = cv.height;
+  }
+  const dpr = CAM.dpr;
+  ectx.setTransform(1, 0, 0, 1, 0, 0);
+  ectx.clearRect(0, 0, eCanvas.width, eCanvas.height);
+  ectx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ectx.lineWidth = 0.55;
+  const e = b.edges;
+  
+  for (const sign of [1, 0]){
+    ectx.beginPath();
+    ectx.strokeStyle = sign ? "rgba(56,190,160,0.13)" : "rgba(210,90,90,0.11)";
+    for (let i = 0; i < e.length; i++){
+      const ed = e[i];
+      if (ed[2] !== sign) continue;
+      const a = ed[0]*2, c = ed[1]*2;
+      ectx.moveTo(pj[a], pj[a+1]);
+      ectx.lineTo(pj[c], pj[c+1]);
+    }
+    ectx.stroke();
+  }
+}
+
+function drawNodes(pj){
+  const b = ST.brain;
+  if (!b || !pj) return;
+  const dpr = CAM.dpr;
+  const n = b.n, role = b.role, cum = ST.cum;
+  ctx.save();
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  for (let i = 0; i < n; i++){
+    const x = pj[i*2], y = pj[i*2+1];
+    if (x < -20 || y < -20 || x > CAM.w+20 || y > CAM.h+20) continue;
+    const c = cum ? cum[i] : 0;
+    const heat = c > 0 ? Math.min(1, Math.log1p(c) / 6) : 0;
+    let r = 1.5 + heat * 2.1;
+    const on = ST.active.has(i);
+    if (on) r += 2.4;
+
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 6.2832);
+    ctx.fillStyle = on ? "#ffffff"
+                       : (heat > 0 ? ROLE_COLOR[role[i]] || "#3d5a52" : "rgba(70,110,100,0.55)");
+    ctx.globalAlpha = on ? 1 : (0.35 + heat * 0.62);
+    ctx.fill();
+
+    if (on){
+      ctx.beginPath();
+      ctx.arc(x, y, r + 5.5, 0, 6.2832);
+      ctx.strokeStyle = "rgba(255,255,255,0.42)";
+      ctx.lineWidth = 1.1;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+let rafLast = 0, fpsAcc = 0, fpsN = 0, tick = 0;
+
+function frame(ts){
+  const dt = rafLast ? (ts - rafLast) : 16;
+  rafLast = ts;
+  fpsAcc += dt; fpsN++;
+  if (fpsAcc > 500){ ST.fps = Math.round(1000 / (fpsAcc/fpsN)); fpsAcc = 0; fpsN = 0; }
+  tick++;
+
+  if (ST.rotating && !dragging){
+    CAM.yaw += dt * 0.00008;
+    edgeDirty = true;
+  }
+  PROJ = project();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+
+  
+  
+  const needEdge = eCanvas.width !== cv.width ||
+                   (edgeDirty && (dragging || (tick & 1) === 0));
+  if (needEdge){
+    drawEdgesLayer(PROJ);
+    edgeDirty = false;
+  }
+  ctx.drawImage(eCanvas, 0, 0);
+  drawNodes(PROJ);
+  requestAnimationFrame(frame);
+}
+
+
+let dragging = false, lastX = 0, lastY = 0, moved = 0;
+
+cv.addEventListener("pointerdown", (e)=>{
+  dragging = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener("pointermove", (e)=>{
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  moved += Math.abs(dx) + Math.abs(dy);
+  CAM.yaw += dx * 0.006;
+  CAM.pitch = Math.max(-1.45, Math.min(1.45, CAM.pitch + dy * 0.006));
+  edgeDirty = true;
+});
+cv.addEventListener("pointerup", (e)=>{
+  dragging = false;
+  try{ cv.releasePointerCapture(e.pointerId); }catch(_){}
+  if (moved < 4) pick(e);
+});
+cv.addEventListener("wheel", (e)=>{
+  e.preventDefault();
+  CAM.zoom = Math.max(0.45, Math.min(4.5, CAM.zoom * (e.deltaY > 0 ? 0.9 : 1.11)));
+  edgeDirty = true;
+}, {passive:false});
+cv.addEventListener("dblclick", ()=>{
+  CAM.yaw = -0.55; CAM.pitch = 0.32; CAM.zoom = 1; edgeDirty = true;
+});
+
+function pick(e){
+  if (!ST.brain || !PROJ) return;
+  const r = cv.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  let best = -1, bd = 14*14;
+  for (let i = 0; i < ST.brain.n; i++){
+    const dx = PROJ[i*2] - mx, dy = PROJ[i*2+1] - my;
+    const d = dx*dx + dy*dy;
+    if (d < bd){ bd = d; best = i; }
+  }
+  const tip = $("#tip");
+  if (best < 0){ tip.style.display = "none"; return; }
+  const b = ST.brain;
+  
+  const vx = (b.vox && b.vox[best]) || [0, 0, 0];
+  
+  let din = 0, dout = 0;
+  for (let i = 0; i < b.edges.length; i++){
+    const e = b.edges[i];
+    if (e[1] === best) din++;
+    if (e[0] === best) dout++;
+  }
+  tip.innerHTML =
+    `<b>#${best}</b> ${ROLE_CN[b.role[best]] || b.role[best] || "—"}<br>
+     <span class="k">类型</span> ${b.type[best] || "—"}<br>
+     <span class="k">侧别</span> ${b.side[best] || "—"}<br>
+     <span class="k">坐标</span> ${vx[0]}, ${vx[1]}, ${vx[2]}<br>
+     <span class="k">突触</span> 入 ${din} / 出 ${dout}<br>
+     <span class="k">累计放电</span> ${ST.cum ? ST.cum[best] : 0}`;
+  tip.style.display = "block";
+  const tw = 200;
+  tip.style.left = Math.min(r.width - tw - 12, Math.max(8, mx + 14)) + "px";
+  tip.style.top = Math.max(8, my - 10) + "px";
+}
+
+
+const LINK = {state:null, busy:false};
+
+async function postLink(body){
+  LINK.busy = true; renderLink();
+  try{
+    const r = await fetch("/api/link", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (j.link) LINK.state = j.link;
+    if (!j.ok && j.error) LINK.error = j.error;
+    else LINK.error = "";
+    return j;
+  }catch(e){
+    LINK.error = "请求失败：" + e;
+    return {ok:false};
+  }finally{
+    LINK.busy = false; renderLink(); renderMenu();
+  }
+}
+
+let linkSig = "";
+
+function renderLink(force){
+  const L = LINK.state || {};
+  const sig = [L.target, L.status, L.connected, L.error, LINK.busy].join("|");
+  if (!force && sig === linkSig) return;
+  linkSig = sig;
+
+  const led2 = $("#led2"), txt = $("#linkTxt"), btn = $("#btnLink");
+  let cls = "", label = "连接大脑模型";
+  if (LINK.busy){ cls = " wait"; label = "连接中…"; }
+  else if (L.connected && L.target === "emu"){ cls = " live"; label = "模拟器 · SR6"; }
+  else if (L.connected && L.target === "serial"){ cls = " live"; label = "真机 · " + (L.endpoint || "串口"); }
+  else if (L.status === "error"){ cls = " err"; label = "连接失败"; }
+  else { cls = ""; label = "连接大脑模型"; }
+
+  led2.className = "led " + cls;
+  txt.textContent = label;
+  btn.className = "btn" + (L.connected ? " on" : (L.status === "error" ? " bad" : ""));
+  btn.disabled = LINK.busy;
+
+  document.body.classList.toggle("real", !!(L.connected && L.target === "serial"));
+  $("#d-link").textContent = L.connected
+    ? (L.target === "emu" ? "模拟器" : (L.endpoint || "串口"))
+    : (L.status === "error" ? "失败" : "未连接");
+
+  if (L.connected && L.target === "emu"){
+    if (emuInit()) unmask();
+  }else if (L.connected && L.target === "serial"){
+    if (emuInit()) mask("真机模式", "3D 视图已冻结<br>动作正在真实设备上执行");
+    else mask("真机已连接", "3D 模型库不可用");
+  }else if (L.status === "error"){
+    mask("连接失败", (L.error || "").slice(0, 220));
+  }else{
+    mask("未连接", "点右上角「连接大脑模型」<br>选模拟器或真机串口");
+  }
+}
+
+async function renderMenu(){
+  const m = $("#menu");
+  const L = LINK.state || {};
+  let html = "";
+
+  if (L.connected){
+    html += `<div class="hd">已连接</div>
+      <div class="mi" style="cursor:default">
+        <div class="ic">●</div>
+        <div><b style="color:#b9f6ce">${L.target === "emu" ? "模拟器 · SR6" : (L.endpoint || "串口")}</b>
+        <small>${L.tcode || ""}${L.axes && L.axes.length ? " · " + L.axes.join(" ") : ""}</small></div>
+      </div>
+      <div class="sep"></div>
+      <div class="mi" data-act="off"><div class="ic">×</div><div>断开连接<small>停止下发指令</small></div></div>`;
+    m.innerHTML = html;
+    return;
+  }
+
+  html += `<div class="hd">选择要连接的大脑模型</div>
+    <div class="mi" data-act="emu">
+      <div class="ic">3D</div>
+      <div><b>模拟器（3D 模型）</b><small>本地 SR6 模型，不碰硬件</small></div>
+    </div>
+    <div class="sep"></div>
+    <div class="hd">真机（USB 串口）</div>
+    <div id="portList"><div class="port" style="color:#3f6157">读取串口中…</div></div>
+    <div class="sep"></div>
+    <div class="mi" data-act="serial">
+      <div class="ic">↻</div>
+      <div><b>自动探测并连接</b><small>按 CH340/CP210x 等关键词挑端口</small></div>
+    </div>`;
+  if (LINK.error) html += `<div class="err">${LINK.error}</div>`;
+  m.innerHTML = html;
+
+  try{
+    const r = await fetch("/api/ports", {cache:"no-store"});
+    const j = await r.json();
+    const list = $("#portList");
+    if (!list) return;
+    if (!j.ports || !j.ports.length){
+      list.innerHTML = `<div class="port" style="color:#7a6a3a">没看到串口 —— 查 USB 线 / 驱动</div>`;
+      return;
+    }
+    list.innerHTML = j.ports.map(p=>
+      `<div class="port" data-port="${p.device}"><b>${p.device}</b>
+        <span>${(p.description || p.name || "").slice(0,34)}</span>
+        ${p.likely ? '<span class="tag">像目标设备</span>' : ""}</div>`
+    ).join("");
+  }catch(e){}
+}
+
+
+
+
+
+$("#menu").addEventListener("click", async (e)=>{
+  const portEl = e.target.closest("[data-port]");
+  const actEl  = e.target.closest("[data-act]");
+  if (!portEl && !actEl) return;
+  $("#menu").hidden = true;               
+  if (portEl){ await postLink({target:"serial", port: portEl.dataset.port}); return; }
+  const act = actEl.dataset.act;
+  await postLink({target: act === "off" ? null : act});
+});
+
+$("#btnLink").onclick = (e)=>{
+  e.stopPropagation();
+  const m = $("#menu");
+  if (!m.hidden){ m.hidden = true; return; }
+  m.hidden = false;
+  renderMenu();
+};
+document.addEventListener("click", (e)=>{
+  const m = $("#menu");
+  if (!m.hidden && !m.contains(e.target) && e.target !== $("#btnLink")) m.hidden = true;
+});
+
+$("#btnRot").onclick = ()=>{
+  ST.rotating = !ST.rotating;
+  $("#btnRot").classList.toggle("on", ST.rotating);
+  $("#btnRot").textContent = ST.rotating ? "⟳ 旋转" : "⟳ 停止";
+};
+$("#btnRot").classList.add("on");
+
+
+function fold(force){
+  const next = (force === undefined) ? !document.body.classList.contains("collapsed") : force;
+  document.body.classList.toggle("collapsed", next);
+  $("#btnFold").textContent = next ? "⟨" : "⟩";
+  setTimeout(()=>{
+    resize();
+    if (EMU.ok){
+      window.dispatchEvent(new Event("resize"));   
+      setTimeout(emuFit, 120);
+    }
+  }, 320);
+}
+$("#btnFold").onclick = ()=> fold(true);
+$("#btnUnfold").onclick = (e)=>{ e.stopPropagation(); fold(false); };
+$("#strip").onclick = ()=> fold(false);
+
+
+$("#btnLTab").onclick = ()=> document.body.classList.add("lopen");
+$("#btnLClose").onclick = ()=> document.body.classList.remove("lopen");
+$("#ldrawer").addEventListener("click", async (e)=>{
+  const b = e.target.closest("[data-stim]");
+  if (!b) return;
+  const kind = b.dataset.stim;
+  b.classList.add("hit");
+  setTimeout(()=>b.classList.remove("hit"), 260);
+  try{
+    await fetch("/api/stim", {method:"POST", cache:"no-store",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({kind})});
+  }catch(_){  }
+});
+
+
+let lastFrameT = -1;
+
+async function poll(){
+  try{
+    const r = await fetch("/state", {cache:"no-store"});
+    const s = await r.json();
+    ST.cum = s.cum;
+    ST.active = new Set(s.frame.active || []);
+    ST.neurons = s.neurons; ST.synapses = s.synapses;
+    ST.link = s.link;
+    const lsig = [s.link.target, s.link.status, s.link.connected, s.link.error].join("|");
+    if (!LINK.state || lsig !== [LINK.state.target, LINK.state.status,
+        LINK.state.connected, LINK.state.error].join("|")){
+      LINK.state = s.link;
+      if (!LINK.busy) renderLink();
+    }
+
+    const ax = s.frame.ax;
+    for (const [k] of AX){
+      const v = ax[k];
+      const b = bars[k];
+      b.fill.style.width = Math.max(0, Math.min(100, v*100)) + "%";
+      let col = k[0] === "L" ? "#38d9d9" : (k[0] === "R" ? "#f5a623" : "#ff5d5d");
+      if (k !== "V0" && v < 0.5) col = k[0] === "L" ? "#2b8fa8" : "#a8731a";
+      b.fill.style.background = col;
+      b.val.textContent = v.toFixed(3);
+    }
+
+    
+    const th = $("#threat"), pd = s.frame.pred_d;
+    if ((s.scenario === "demo" || s.scenario === "live")
+        && typeof pd === "number"){
+      th.classList.add("on");
+      const on = !!s.frame.pred_on;
+      th.classList.toggle("idle", !on);
+      $("#thLbl").textContent = on ? "捕食者" : "无威胁";
+      $("#thVal").textContent = on ? pd.toFixed(1) : "—";
+      const lvl = Math.max(0, Math.min(1, (45 - pd) / (45 - 2.5)));
+      $("#thBar").style.width = (on ? lvl * 100 : 0).toFixed(0) + "%";
+      const hot = on && !!s.frame.threat;
+      th.classList.toggle("hot", hot);
+      
+      th.classList.toggle("warn", on && !hot && pd <= 24);
+    }else{
+      th.classList.remove("on", "hot", "warn", "idle");
+    }
+
+    const tcEl = $("#tc");
+    const sent = s.frame.sent;
+    
+    
+    tcEl.textContent = sent ? s.frame.tc : (s.frame.tc_preview || "—");
+    tcEl.className = "val" + (sent ? "" : " pending");
+    $("#tclbl").textContent = sent ? "TCODE" : "TCODE · 预览（未下发）";
+
+    $("#d-t").textContent = s.frame.t + " ms";
+    $("#d-tx").textContent = s.frame.tx || 0;
+    $("#led").className = "led live";
+
+    const L = s.link || {};
+    const tot = ST.cum ? ST.cum.reduce((a,b)=>a+b,0) : 0;
+    $("#sub").textContent =
+      `${s.neurons} 神经元 / ${s.synapses} 突触 · 本帧放电 ${s.frame.spikes} · 累计 ${tot}`
+      + (ST.fps ? ` · ${ST.fps}fps` : "");
+
+    if (L.connected && L.target === "emu") emuFeed(ax);
+  }catch(e){
+    $("#led").className = "led err";
+    $("#sub").textContent = "与脑的连接断开…";
+  }
+  setTimeout(poll, 33);
+}
+
+
+async function boot(){
+  resize();
+  requestAnimationFrame(frame);
+  try{
+    const r = await fetch("/brain", {cache:"no-store"});
+    ST.brain = await r.json();
+  }catch(e){
+    $("#sub").textContent = "脑拓扑加载失败";
+  }
+  renderLink();
+  poll();
+}
+boot();
+</script>
+</body>
+</html>
